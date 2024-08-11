@@ -7,12 +7,13 @@ import {
   Rect,
   Text,
   Line,
-  KonvaNodeComponent,
+  Transformer,
 } from 'react-konva';
 import { pdfjs } from 'react-pdf';
 import { PDFDocument } from 'pdf-lib';
-import html2canvas from 'html2canvas';
 import { Stage as StageType } from 'konva/lib/Stage';
+import { Transformer as TransformerType } from 'konva/lib/shapes/Transformer';
+import * as pdfjsLib from 'pdfjs-dist';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -41,6 +42,8 @@ type ImageType = {
   y: number;
   src: string;
   id: string;
+  width?: number;
+  height?: number;
 };
 
 const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
@@ -56,7 +59,12 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   const [drawings, setDrawings] = useState<
     { tool: string; points: number[] }[]
   >([]);
-  const [tool, setTool] = useState('pen');
+  const [canvasDimensions, setCanvasDimensions] = useState({
+    width: 800,
+    height: 600,
+  });
+
+  const [tool, setTool] = useState('');
   const [isDrawing, setIsDrawing] = useState(false);
 
   const [selectedId, selectShape] = React.useState<string | null>(null);
@@ -66,6 +74,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   };
 
   const saveAsPDF = async () => {
+    selectShape(null);
     const stage = stageRef.current;
     const canvas = stage?.toCanvas();
     if (!canvas) {
@@ -104,6 +113,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const viewport = page.getViewport({ scale: 1.5 });
+
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d')!;
         canvas.height = viewport.height;
@@ -115,6 +125,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
         };
         await page.render(renderContext).promise;
         imageUrls.push(canvas.toDataURL());
+        setCanvasDimensions({ width: viewport.width, height: viewport.height });
       }
 
       setImageUrls(imageUrls);
@@ -126,7 +137,6 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   const loadImage = async (url: string) => {
     const image = document.createElement('img');
     image.src = url;
-    // const [image] = useImage(url);
     return image;
   };
 
@@ -142,14 +152,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
     }
   }, [imageUrls]);
 
-  // const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
-  //   // Deselect when clicked on empty area
-  //   if (e.target === e.target.getStage()) {
-  //     selectShape(null);
-  //     return;
-  //   }
-  // };
-
+  const trRef = useRef<TransformerType>(null);
   const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
     if (tool === 'pen') {
       setIsDrawing(true);
@@ -176,38 +179,6 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   const handleMouseUp = () => {
     setIsDrawing(false);
   };
-  // useEffect(() => {
-  //   const renderPDFPages = async () => {
-  //     const imagesArray = [];
-  //     const loadingTask = pdfjs.getDocument(
-  //       'https://pdfobject.com/pdf/sample.pdf'
-  //     );
-  //     const pdf = await loadingTask.promise;
-  //     if (!numPages) {
-  //       return;
-  //     }
-  //     for (let i = 1; i <= numPages; i++) {
-  //       const canvas = document.createElement('canvas');
-  //       const page = await pdf.getPage(i);
-  //       const viewport = page.getViewport({ scale: 1.5 });
-  //       const context = canvas.getContext('2d')!;
-  //       canvas.height = viewport.height;
-  //       canvas.width = viewport.width;
-
-  //       const renderContext = {
-  //         canvasContext: context,
-  //         viewport: viewport,
-  //       };
-  //       if (!renderContext.canvasContext) {
-  //         return;
-  //       }
-  //       await page.render(renderContext).promise;
-  //       imagesArray.push(canvas.toDataURL());
-  //     }
-  //     setImages(imagesArray);
-  //   };
-  //   if(numPages)renderPDFPages();
-  // }, [numPages, pdfUrl]);
   const addRectangle = () => {
     const newRect = {
       x: 10,
@@ -231,29 +202,73 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
     setTextObjects([...textObjects, newText]);
   };
 
-  const addImage = (imageUrl: string) => {
-    const newImage = {
-      x: 10,
-      y: 10,
-      src: imageUrl,
-      id: `img${images.length + 1}`,
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onloadend = () => {
+      if (!reader.result) return;
+
+      const newImage: ImageType = {
+        x: 10,
+        y: 10,
+        src: reader.result as string,
+        id: `img${imagesObjects.length + 1}`,
+        width: 100,
+        height: 100,
+      };
+
+      setImagesObjects([...imagesObjects, newImage]);
     };
-    setImagesObjects([...imagesObjects, newImage]);
+  };
+  const handleTransform = (e: any, index: number) => {
+    const node = e.target;
+    const newImagesObjects = imagesObjects.slice();
+    newImagesObjects[index] = {
+      ...newImagesObjects[index],
+      x: node.x(),
+      y: node.y(),
+      width: node.width(),
+      height: node.height(),
+    };
+    setImagesObjects(newImagesObjects);
   };
 
+  const loadPdfDimensions = async (pdfUrl: string) => {
+    const loadingTask = pdfjsLib.getDocument(pdfUrl);
+    const pdf = await loadingTask.promise;
+    const page = await pdf.getPage(1); // Get the first page (or any other page)
+    const viewport = page.getViewport({ scale: 1.5 });
+    // Set canvas dimensions to match the PDF page dimensions
+    setCanvasDimensions({ width: viewport.width, height: viewport.height });
+  };
+  const handleSelect = (e: KonvaEventObject<MouseEvent>) => {
+    selectShape(e.target.id());
+  };
+  useEffect(() => {
+    if (trRef.current && selectedId) {
+      const selectedNode = stageRef.current?.findOne(`#${selectedId}`);
+      if (selectedNode) {
+        trRef.current?.nodes([selectedNode]);
+        trRef.current?.getLayer()?.batchDraw();
+      }
+    }
+  }, [selectedId]);
+
+  useEffect(() => {
+    loadPdfDimensions('https://pdfobject.com/pdf/sample.pdf'); // Load PDF dimensions from the given URL
+  }, []);
   return (
     <>
       <button onClick={() => setTool('pen')}>Pen</button>
       <button onClick={() => addRectangle()}>addRectangle</button>
       <button onClick={() => addText()}>addText</button>
-      <button
-        onClick={() => addImage('https://freesvg.org/img/1286146771.png')}
-      >
-        addImage
-      </button>
+      <input type='file' onChange={handleImageUpload} accept='image/*' />
       <Stage
-        width={window.innerWidth}
-        height={window.innerHeight}
+        width={canvasDimensions.width}
+        height={canvasDimensions.height}
         ref={stageRef}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -287,14 +302,29 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
             const image = document.createElement('img');
             image.src = img.src;
             return (
-              <KonvaImage
-                key={i}
-                image={image}
-                {...img}
-                draggable
-                onClick={() => selectShape(img.id)}
-                onTap={() => selectShape(img.id)}
-              />
+              <React.Fragment key={img.id}>
+                <KonvaImage
+                  key={i}
+                  image={image}
+                  {...img}
+                  draggable
+                  onClick={handleSelect}
+                  onTap={handleSelect}
+                  onTransformEnd={(e) => handleTransform(e, i)}
+                />
+                {selectedId === img.id && (
+                  <Transformer
+                    ref={trRef}
+                    boundBoxFunc={(oldBox, newBox) => {
+                      // Limit resize to a minimum size
+                      if (newBox.width < 50 || newBox.height < 50) {
+                        return oldBox;
+                      }
+                      return newBox;
+                    }}
+                  />
+                )}
+              </React.Fragment>
             );
           })}
         </Layer>
@@ -309,13 +339,6 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
               lineCap='round'
             />
           ))}
-          {/* {texts.map((text, i) => (
-                        <Text key={i} x={text.x} y={text.y} text={text.text} fontSize={20} draggable />
-                    ))} */}
-          {/* {images.map((image, i) => {
-                        const [img] = useImage(image.src);
-                        return <KonvaImage key={i} x={image.x} y={image.y} image={img} draggable />;
-                    })} */}
         </Layer>
       </Stage>
       <button onClick={saveAsPDF}>Save as PDF</button>
