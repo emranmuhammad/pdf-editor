@@ -57,7 +57,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   const stageRef = useRef<StageType | null>(null);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [drawings, setDrawings] = useState<
-    { tool: string; points: number[] }[]
+    { tool: string; points: number[]; color: string; strokeWidth: number }[]
   >([]);
   const [canvasDimensions, setCanvasDimensions] = useState({
     width: 800,
@@ -66,15 +66,15 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
 
   const [tool, setTool] = useState('');
   const [isDrawing, setIsDrawing] = useState(false);
-
+  const [pinColor, setPinColor] = useState('black ');
   const [selectedId, selectShape] = React.useState<string | null>(null);
-
+  const [strokeWidth, setStrokeWidth] = useState(2);
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
   };
 
   const saveAsPDF = async () => {
-    selectShape(null);
+    await selectShape(null);
     const stage = stageRef.current;
     const canvas = stage?.toCanvas();
     if (!canvas) {
@@ -158,7 +158,10 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
       setIsDrawing(true);
       const pos = e.target.getStage()?.getPointerPosition();
       if (pos) {
-        setDrawings([...drawings, { tool, points: [pos.x, pos.y] }]);
+        setDrawings([
+          ...drawings,
+          { tool, points: [pos.x, pos.y], color: pinColor, strokeWidth },
+        ]);
       }
     }
   };
@@ -203,6 +206,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   };
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setTool('');
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -263,8 +267,31 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   return (
     <>
       <button onClick={() => setTool('pen')}>Pen</button>
-      <button onClick={() => addRectangle()}>addRectangle</button>
-      <button onClick={() => addText()}>addText</button>
+      <input
+        type='color'
+        onChange={(e) => setPinColor(e.target.value)}
+        value={pinColor}
+      />
+      <input
+        type='range'
+        onChange={(e) => setStrokeWidth(4 * (e.target.valueAsNumber / 100))}
+      />
+      <button
+        onClick={() => {
+          addRectangle();
+          setTool('');
+        }}
+      >
+        addRectangle
+      </button>
+      <button
+        onClick={() => {
+          addText();
+          setTool('');
+        }}
+      >
+        addText
+      </button>
       <input type='file' onChange={handleImageUpload} accept='image/*' />
       <Stage
         width={canvasDimensions.width}
@@ -333,8 +360,8 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
             <Line
               key={i}
               points={drawing.points}
-              stroke='black'
-              strokeWidth={2}
+              stroke={drawing.color}
+              strokeWidth={drawing.strokeWidth}
               tension={0.5}
               lineCap='round'
             />
