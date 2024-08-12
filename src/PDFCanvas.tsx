@@ -1,5 +1,5 @@
 import { KonvaEventObject } from 'konva/lib/Node';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { TouchEvent, useEffect, useRef, useState } from 'react';
 import {
   Stage,
   Layer,
@@ -53,22 +53,32 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   );
   const [rectangles, setRectangles] = React.useState<rectType[]>([]);
   const [textObjects, setTextObjects] = React.useState<TextType[]>([]);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState('');
   const [imagesObjects, setImagesObjects] = React.useState<ImageType[]>([]);
   const stageRef = useRef<StageType | null>(null);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [drawings, setDrawings] = useState<
-    { tool: string; points: number[]; color: string; strokeWidth: number }[]
+    {
+      tool: string;
+      points: number[];
+      color: string;
+      strokeWidth: number;
+    }[]
   >([]);
   const [canvasDimensions, setCanvasDimensions] = useState({
     width: 800,
     height: 600,
   });
 
-  const [tool, setTool] = useState('');
+  const [tool, setTool] = useState<'pen' | 'eraser' | ''>('');
   const [isDrawing, setIsDrawing] = useState(false);
-  const [pinColor, setPinColor] = useState('black ');
+  const [pinColor, setPinColor] = useState('#000000');
   const [selectedId, selectShape] = React.useState<string | null>(null);
   const [strokeWidth, setStrokeWidth] = useState(2);
+  const isMobileDrawing = useRef(false);
+
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
   };
@@ -112,12 +122,16 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
 
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale: 1.5 });
+        const viewport = page.getViewport({ scale: 1 });
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d')!;
         canvas.height = viewport.height;
-        canvas.width = viewport.width;
+        const width =
+          viewport.width > window.innerWidth
+            ? window.innerWidth
+            : viewport.width;
+        canvas.width = width;
 
         const renderContext = {
           canvasContext: context,
@@ -125,7 +139,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
         };
         await page.render(renderContext).promise;
         imageUrls.push(canvas.toDataURL());
-        setCanvasDimensions({ width: viewport.width, height: viewport.height });
+        // setCanvasDimensions({ width: viewport.width, height: viewport.height });
       }
 
       setImageUrls(imageUrls);
@@ -135,7 +149,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   }, [pdfUrl]);
 
   const loadImage = async (url: string) => {
-    const image = document.createElement('img');
+    const image = new Image();
     image.src = url;
     return image;
   };
@@ -153,14 +167,35 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   }, [imageUrls]);
 
   const trRef = useRef<TransformerType>(null);
-  const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+  const handleMouseDown = (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
     if (tool === 'pen') {
       setIsDrawing(true);
       const pos = e.target.getStage()?.getPointerPosition();
       if (pos) {
         setDrawings([
           ...drawings,
-          { tool, points: [pos.x, pos.y], color: pinColor, strokeWidth },
+          {
+            tool,
+            points: [pos.x, pos.y],
+            color: pinColor,
+            strokeWidth,
+            type: tool,
+          },
+        ]);
+      }
+    } else if (tool === 'eraser') {
+      setIsDrawing(true);
+      const pos = e.target.getStage()?.getPointerPosition();
+      if (pos) {
+        setDrawings([
+          ...drawings,
+          {
+            tool,
+            points: [pos.x, pos.y],
+            color: 'white',
+            strokeWidth: 20,
+            type: tool,
+          },
         ]);
       }
     }
@@ -244,12 +279,132 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
     const loadingTask = pdfjsLib.getDocument(pdfUrl);
     const pdf = await loadingTask.promise;
     const page = await pdf.getPage(1); // Get the first page (or any other page)
-    const viewport = page.getViewport({ scale: 1.5 });
+    const viewport = page.getViewport({ scale: 1 });
     // Set canvas dimensions to match the PDF page dimensions
-    setCanvasDimensions({ width: viewport.width, height: viewport.height });
+    const width =
+      viewport.width > window.innerWidth ? window.innerWidth : viewport.width;
+    setCanvasDimensions({ width, height: viewport.height });
   };
   const handleSelect = (e: KonvaEventObject<MouseEvent>) => {
     selectShape(e.target.id());
+  };
+
+  const handleTouchStart = (e: KonvaEventObject<globalThis.TouchEvent>) => {
+    isMobileDrawing.current = true;
+    const pos = e.target.getStage()?.getPointerPosition();
+    if (pos) {
+      if (tool === 'pen') {
+        setDrawings([
+          ...drawings,
+          {
+            tool,
+            points: [pos.x, pos.y],
+            color: pinColor,
+            strokeWidth,
+          },
+        ]);
+      } else if (tool === 'eraser') {
+        setDrawings([
+          ...drawings,
+          {
+            tool,
+            points: [pos.x, pos.y],
+            color: 'white',
+            strokeWidth: 20,
+          },
+        ]);
+      }
+    }
+  };
+
+  const handleTouchMove = (e: KonvaEventObject<globalThis.TouchEvent>) => {
+    if (!isMobileDrawing.current || !tool) {
+      return;
+    }
+    const stage = e.target.getStage();
+    const point = stage?.getPointerPosition();
+    const lastLine = drawings[drawings.length - 1];
+    if (lastLine && point) {
+      lastLine.points = lastLine.points.concat([point.x, point.y]);
+      setDrawings([...drawings.slice(0, -1), lastLine]);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    isMobileDrawing.current = false;
+  };
+  const handleTextClick = (id: string, text: string, x: number, y: number) => {
+    setSelectedTextId(id);
+    setEditText(text);
+    setIsEditing(true);
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'absolute';
+    textarea.style.top = `${
+      y + (stageRef.current?.container()?.offsetTop ?? 0)
+    }px`;
+    textarea.style.left = `${
+      x + (stageRef.current?.container()?.offsetLeft ?? 0)
+    }px`;
+    textarea.style.fontSize = '20px';
+    textarea.style.border = 'none';
+    textarea.style.padding = '0';
+    textarea.style.margin = '0';
+    textarea.style.overflow = 'hidden';
+    textarea.style.background = 'none';
+    textarea.style.outline = 'none';
+    textarea.style.resize = 'none';
+    textarea.style.transformOrigin = 'left top';
+    textarea.style.lineHeight = '1';
+    textarea.style.height = 'auto';
+    textarea.style.minHeight = '1em';
+    textarea.style.width = `${text.length * 10}px`; // Estimate width based on text length
+    textarea.style.color = 'black';
+
+    document.body.appendChild(textarea);
+    textarea.focus();
+
+    textarea.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finishEditing(id, textarea.value);
+      } else if (e.key === 'Escape') {
+        cancelEditing();
+      }
+    });
+
+    textarea.addEventListener('blur', function () {
+      finishEditing(id, textarea.value);
+    });
+  };
+
+  const finishEditing = (id: string, newText: string) => {
+    setIsEditing(false);
+    setTextObjects(
+      textObjects.map((textObj) =>
+        textObj.id === id ? { ...textObj, text: newText } : textObj
+      )
+    );
+    document.body.removeChild(
+      document.querySelector('textarea') as HTMLTextAreaElement
+    );
+    setSelectedTextId(null);
+  };
+
+  const cancelEditing = () => {
+    setIsEditing(false);
+    document.body.removeChild(
+      document.querySelector('textarea') as HTMLTextAreaElement
+    );
+    setSelectedTextId(null);
+  };
+  const handleDragEnd = (id: string, newX: number, newY: number) => {
+    setTextObjects(
+      textObjects.map((textObj) =>
+        textObj.id === id ? { ...textObj, x: newX, y: newY } : textObj
+      )
+    );
   };
   useEffect(() => {
     if (trRef.current && selectedId) {
@@ -264,35 +419,53 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   useEffect(() => {
     loadPdfDimensions('https://pdfobject.com/pdf/sample.pdf'); // Load PDF dimensions from the given URL
   }, []);
+
   return (
     <>
-      <button onClick={() => setTool('pen')}>Pen</button>
-      <input
-        type='color'
-        onChange={(e) => setPinColor(e.target.value)}
-        value={pinColor}
-      />
-      <input
-        type='range'
-        onChange={(e) => setStrokeWidth(4 * (e.target.valueAsNumber / 100))}
-      />
-      <button
-        onClick={() => {
-          addRectangle();
-          setTool('');
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '10px',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
-        addRectangle
-      </button>
-      <button
-        onClick={() => {
-          addText();
-          setTool('');
-        }}
-      >
-        addText
-      </button>
-      <input type='file' onChange={handleImageUpload} accept='image/*' />
+        <button onClick={() => setTool('pen')}>Pen</button>
+        <button onClick={() => setTool('eraser')}>Eraser</button>
+        <button
+          onClick={() => setDrawings((prev) => prev.slice(0, prev.length - 1))}
+        >
+          undo
+        </button>
+        <input
+          type='color'
+          onChange={(e) => setPinColor(e.target.value)}
+          value={pinColor}
+        />
+        <input
+          type='range'
+          onChange={(e) => setStrokeWidth(4 * (e.target.valueAsNumber / 100))}
+        />
+        <button onClick={() => setTool('eraser')}>Eraser</button>
+        <button
+          onClick={() => {
+            addRectangle();
+            setTool('');
+          }}
+        >
+          addRectangle
+        </button>
+        <button
+          onClick={() => {
+            addText();
+            setTool('');
+          }}
+        >
+          addText
+        </button>
+        <input type='file' onChange={handleImageUpload} accept='image/*' />
+      </div>
       <Stage
         width={canvasDimensions.width}
         height={canvasDimensions.height}
@@ -300,6 +473,10 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        style={{ touchAction: 'none' }}
       >
         <Layer>
           {images.map((image, index) => (
@@ -316,15 +493,35 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
               onTap={() => selectShape(rect.id)}
             />
           ))}
-          {textObjects.map((text, i) => (
-            <Text
-              key={i}
-              {...text}
-              draggable
-              onClick={() => selectShape(text.id)}
-              onTap={() => selectShape(text.id)}
-            />
-          ))}
+          {textObjects.map(
+            (text) =>
+              // <Text
+              //   key={i}
+              //   {...text}
+              //   draggable
+              //   onClick={() => selectShape(text.id)}
+              //   onTap={() => selectShape(text.id)}
+              // />
+              selectedTextId !== text.id && (
+                <Text
+                  key={text.id}
+                  text={text.text}
+                  x={text.x}
+                  y={text.y}
+                  fontSize={20}
+                  draggable
+                  onDragEnd={(e) =>
+                    handleDragEnd(text.id, e.target.x(), e.target.y())
+                  }
+                  onClick={() =>
+                    handleTextClick(text.id, text.text, text.x, text.y)
+                  }
+                  onTap={() =>
+                    handleTextClick(text.id, text.text, text.x, text.y)
+                  }
+                />
+              )
+          )}
           {imagesObjects.map((img, i) => {
             const image = document.createElement('img');
             image.src = img.src;
