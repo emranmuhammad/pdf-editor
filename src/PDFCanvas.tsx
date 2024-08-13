@@ -1,5 +1,11 @@
 import { KonvaEventObject } from 'konva/lib/Node';
-import React, { TouchEvent, useEffect, useRef, useState } from 'react';
+import React, {
+  Children,
+  TouchEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   Stage,
   Layer,
@@ -61,6 +67,8 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [drawings, setDrawings] = useState<
     {
+      id: string;
+      pointId: string;
       tool: string;
       points: number[];
       color: string;
@@ -71,6 +79,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
     width: 800,
     height: 600,
   });
+  const [currentLineId, setCurrentLineId] = useState<string | null>(null);
 
   const [tool, setTool] = useState<'pen' | 'eraser' | ''>('');
   const [isDrawing, setIsDrawing] = useState(false);
@@ -78,6 +87,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   const [selectedId, selectShape] = React.useState<string | null>(null);
   const [strokeWidth, setStrokeWidth] = useState(2);
   const isMobileDrawing = useRef(false);
+  const isErasing = useRef(false);
 
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
@@ -167,7 +177,11 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   }, [imageUrls]);
 
   const trRef = useRef<TransformerType>(null);
-  const handleMouseDown = (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
+  const handleMouseDown = async (
+    e: KonvaEventObject<MouseEvent | TouchEvent>
+  ) => {
+    const lineId = crypto.randomUUID();
+    await setCurrentLineId(lineId);
     if (tool === 'pen') {
       setIsDrawing(true);
       const pos = e.target.getStage()?.getPointerPosition();
@@ -175,47 +189,61 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
         setDrawings([
           ...drawings,
           {
+            id: lineId,
+            pointId: crypto.randomUUID(),
             tool,
             points: [pos.x, pos.y],
             color: pinColor,
             strokeWidth,
-            type: tool,
-          },
-        ]);
-      }
-    } else if (tool === 'eraser') {
-      setIsDrawing(true);
-      const pos = e.target.getStage()?.getPointerPosition();
-      if (pos) {
-        setDrawings([
-          ...drawings,
-          {
-            tool,
-            points: [pos.x, pos.y],
-            color: 'white',
-            strokeWidth: 20,
-            type: tool,
           },
         ]);
       }
     }
+    // else if (tool === 'eraser') {
+    //   setIsDrawing(true);
+    //   const pos = e.target.getStage()?.getPointerPosition();
+    //   if (pos) {
+    //     setDrawings([
+    //       ...drawings,
+    //       {
+    //         id: lineId,
+    //         tool,
+    //         points: [pos.x, pos.y],
+    //         color: 'white',
+    //         strokeWidth: 20,
+    //       },
+    //     ]);
+    //   }
+    // }
   };
 
   const handleMouseMove = (e: KonvaEventObject<MouseEvent>) => {
-    if (!isDrawing) return;
+    if (!isDrawing || tool === 'eraser') return;
 
     const stage = e.target.getStage();
     const point = stage?.getPointerPosition();
     let lastLine = drawings[drawings.length - 1];
-    if (point) {
-      lastLine.points = lastLine.points.concat([point.x, point.y]);
-      drawings.splice(drawings.length - 1, 1, lastLine);
-      setDrawings(drawings.concat());
+    if (point && currentLineId) {
+      // lastLine.points = lastLine.points.concat([point.x, point.y]);
+      // drawings.splice(drawings.length - 1, 1, lastLine);
+      // setDrawings(drawings.concat());
+      setDrawings((prev) => [
+        ...prev,
+        {
+          id: currentLineId,
+          pointId: crypto.randomUUID(),
+          tool,
+          points: lastLine.points.slice(-2).concat([point.x, point.y]),
+          strokeWidth,
+          color: pinColor,
+        },
+      ]);
     }
   };
 
   const handleMouseUp = () => {
     setIsDrawing(false);
+    setCurrentLineId(null);
   };
   const addRectangle = () => {
     const newRect = {
@@ -291,12 +319,16 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
 
   const handleTouchStart = (e: KonvaEventObject<globalThis.TouchEvent>) => {
     isMobileDrawing.current = true;
+    const lineId = crypto.randomUUID();
     const pos = e.target.getStage()?.getPointerPosition();
     if (pos) {
       if (tool === 'pen') {
         setDrawings([
           ...drawings,
           {
+            id: lineId,
+            pointId: crypto.randomUUID(),
+
             tool,
             points: [pos.x, pos.y],
             color: pinColor,
@@ -307,6 +339,9 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
         setDrawings([
           ...drawings,
           {
+            id: lineId,
+            pointId: crypto.randomUUID(),
+
             tool,
             points: [pos.x, pos.y],
             color: 'white',
@@ -406,6 +441,24 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
       )
     );
   };
+
+  const undoHandler = () => {
+    const lastLine = drawings[drawings.length - 1];
+    setDrawings((prev) => prev.filter((item) => item.id !== lastLine.id));
+  };
+  const toggleEraser = (pointId: string) => {
+    if (tool === 'eraser') {
+      isErasing.current = !isErasing.current;
+      if (isErasing.current) {
+        eraseHandler(pointId);
+      }
+    }
+  };
+  const eraseHandler = (i: string) => {
+    if (tool === 'eraser') {
+      setDrawings((prev) => prev.filter((item) => item.pointId !== i));
+    }
+  };
   useEffect(() => {
     if (trRef.current && selectedId) {
       const selectedNode = stageRef.current?.findOne(`#${selectedId}`);
@@ -419,6 +472,15 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
   useEffect(() => {
     loadPdfDimensions('https://pdfobject.com/pdf/sample.pdf'); // Load PDF dimensions from the given URL
   }, []);
+  const eraserIcon =
+    'url(https://img.icons8.com/ios-glyphs/30/eraser.png) 0 25, auto';
+  const penIcon = `url(https://img.icons8.com/ios-filled/30/${pinColor.substring(
+    1
+  )}/pen.png) 0 30, auto`;
+  const cursorTypes = {
+    pen: penIcon,
+    eraser: eraserIcon,
+  };
 
   return (
     <>
@@ -433,11 +495,7 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
       >
         <button onClick={() => setTool('pen')}>Pen</button>
         <button onClick={() => setTool('eraser')}>Eraser</button>
-        <button
-          onClick={() => setDrawings((prev) => prev.slice(0, prev.length - 1))}
-        >
-          undo
-        </button>
+        <button onClick={() => undoHandler()}>undo</button>
         <input
           type='color'
           onChange={(e) => setPinColor(e.target.value)}
@@ -447,7 +505,6 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
           type='range'
           onChange={(e) => setStrokeWidth(4 * (e.target.valueAsNumber / 100))}
         />
-        <button onClick={() => setTool('eraser')}>Eraser</button>
         <button
           onClick={() => {
             addRectangle();
@@ -476,7 +533,10 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        style={{ touchAction: 'none' }}
+        style={{
+          touchAction: 'none',
+          cursor: cursorTypes[tool as keyof typeof cursorTypes] ?? 'default',
+        }}
       >
         <Layer>
           {images.map((image, index) => (
@@ -553,16 +613,25 @@ const PDFCanvas = ({ pdfUrl }: { pdfUrl: string }) => {
           })}
         </Layer>
         <Layer>
-          {drawings.map((drawing, i) => (
-            <Line
-              key={i}
-              points={drawing.points}
-              stroke={drawing.color}
-              strokeWidth={drawing.strokeWidth}
-              tension={0.5}
-              lineCap='round'
-            />
-          ))}
+          {Children.toArray(
+            drawings.map((drawing) => (
+              <Line
+                points={drawing.points}
+                stroke={drawing.color}
+                strokeWidth={drawing.strokeWidth}
+                tension={0.5}
+                lineCap='round'
+                onClick={() => toggleEraser(drawing.pointId)}
+                onMouseEnter={(e) => {
+                  e.evt.stopPropagation();
+                  if (tool === 'eraser') {
+                    eraseHandler(drawing.pointId);
+                  }
+                }}
+                hitStrokeWidth={drawing.strokeWidth * 4}
+              />
+            ))
+          )}
         </Layer>
       </Stage>
       <button onClick={saveAsPDF}>Save as PDF</button>
